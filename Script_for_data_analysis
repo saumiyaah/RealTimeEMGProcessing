@@ -1,0 +1,170 @@
+clear all;
+close all; 
+clc;       
+
+%% User Inputs
+
+validInput = false;         % Initialise valid input flag
+AnalogFrameRate = 2222;     % Sampling frequency
+
+while ~validInput           % While validInput is false
+    prompt = {
+        'What is the total trial length (seconds)?',
+        'What is the window of interest pre-stimulation (milliseconds)?',
+        'What is the window of interest post-stimulation (milliseconds)?',
+        'What is the input channel?',
+        'What is the trigger channel?',
+        'How often do you want plots updated (in seconds)?'
+        'What is the participant ID?',
+        'What is the stimulation intensity?'
+    };
+    dlg_title = 'Analysis Parameters';                                      % Title for dialog box
+    num_lines = 1;                                                          % Number of lines for answer
+    defaultans = {'150', '-20', '60', '1', '5', '50', 'P1', '30'};          % Default answers set
+    user_input = inputdlg(prompt, dlg_title, num_lines, defaultans);        % Display input dialog
+    
+    if isempty(user_input) % Check if the user pressed Cancel
+        return             % Close program
+    else
+        validInput = true;
+        RunTime = str2double(user_input{1});        % Total trial length in seconds
+        pre_Window = str2double(user_input{2});     % Window of interest pre-stimulation in milliseconds
+        Window = str2double(user_input{3});         % Window of interest post-stimulation in milliseconds
+        EMGChannel = str2double(user_input{4});     % Input channel
+        TriggerChannel = str2double(user_input{5}); % Trigger channel
+        SegmentLength = str2double(user_input{6});  % How often to update plots in seconds
+        ID = user_input{7};                         % Participant ID 
+        StimIntensity = user_input{8};              % Stimulation Intensity
+    end
+
+
+    %% Error Checking 
+    errorMessage = ""; % Initialise empty string
+    
+    % Run Time error check
+    if isempty(RunTime) || isnan(RunTime) || RunTime < 1 || floor(RunTime) ~= RunTime
+        errorMessage = append(errorMessage, "Run time (must be an integer greater than 1). ");
+    end
+    
+    % Plot Window error check
+    if pre_Window >= Window
+        errorMessage = append(errorMessage, "Plot window (value 1 must be lower than value 2). ");
+    end
+    
+    % Update Plots error check
+    if isempty(SegmentLength) || isnan(SegmentLength) || SegmentLength < 1 || SegmentLength > 100 || floor(SegmentLength) ~= SegmentLength
+        errorMessage = append(errorMessage, "Update plots timeframe (must be an integer between 1 and 100). ");
+    end
+    
+    % Display the error message if there are any errors
+    if errorMessage ~= ""
+        errorText = ['Please correct the following inputs: ', errorMessage];
+        e = errordlg(errorText, 'Invalid Input');
+        uiwait(e); % Ensures the user cannot proceed
+    end
+
+end
+
+SaveQuest = questdlg('Would you like to save this data?','Save Data?','Yes','No','Yes');
+
+if strcmp(SaveQuest,'Yes')
+    dataIsSaved = true;
+    saveLocation = uigetdir('', 'Select a location to save your files'); % Pop-up for user to select save location
+else
+    warndlg ('Your data will not be saved!');
+end
+
+Time = pre_Window:1/2222*1000 : Window; 
+TotalPlots = RunTime/SegmentLength;
+
+f = figure;
+f.WindowState = "maximized";                    % Automatically maximise window
+count = 0;                                      % Initialise count variable
+emg_window_data = [];
+
+for i_set = 1:(TotalPlots)
+    %% 1 - Loading online data
+    
+    % % Enter live streaming mode
+    % [temp1,~, ~, ~] = DelsysTrignoControl_ForSaumi(RunTime/TotalPlots); % Function output assignment
+    % % Exit live streaming mode for offline processing and update graphs
+    % emgDataArray{i_set,1} = temp1;                      % Insert real-time data into output variable
+    % clear temp*
+    % pause(0.1)
+    
+    %% 2 - Identifying trigger onsets 
+    
+    negative_emg_signal = -emgDataArray{i_set,1}(:,TriggerChannel);     % Extract the negative EMG signal from the data from channel 5
+    min_emg = min(negative_emg_signal);                    % Calculate minimum values of the negative EMG signal
+    max_emg = max(negative_emg_signal);                    % Calculate maximum values of the negative EMG signal
+    min_peak_height = min_emg + (max_emg - min_emg) / 2;   % Calculate minimum peak height as midpoint between min and max
+   
+    % Finding peaks in the negative EMG signal
+    [~, StimFrames] = findpeaks(negative_emg_signal, 'MinPeakHeight', min_peak_height, 'MinPeakDistance', AnalogFrameRate);
+    temp = [];
+   
+    %% 3 - Generate plot of all MEP traces
+    
+    amplitude_str = [];
+
+    for i_stim = 1:size(StimFrames,1)                      % For all stimulation frames
+        count = count + 1;
+
+        % Extracts EMG data in window of interest for current stimulation and appends to new column in matrix
+        if size(emgDataArray{i_set, 1}, EMGChannel) >= round(round(StimFrames(i_stim) + Window/1000*2222))
+            emg_window_data(:,count) = emgDataArray{i_set, 1}(round(StimFrames(i_stim) + pre_Window/1000*2222):round(StimFrames(i_stim) + Window/1000*2222), EMGChannel);
+            min_value(:,count) = min(emg_window_data(:,count));         % Extract minimum values within window of interest
+            max_value(:,count) = max(emg_window_data(:,count));         % Extract maximum values within window of interest
+            pk_pk_amplitude(:,count) = max_value(:,count) - min_value(:,count);
+            currentpk_pk_amplitude = pk_pk_amplitude(count);
+    
+            % Convert to string with exponent notation
+            exponent = floor(log10(currentpk_pk_amplitude));
+            coefficient = currentpk_pk_amplitude / (10^exponent);
+            amplitude_str_temp = sprintf('%g x 10^{%d}', coefficient, exponent);  
+            amplitude_str{end+1} = amplitude_str_temp;
+            clear amplitude_str_temp
+
+            % Calculate average line of all stimulations 
+            average_emg_data = mean(emg_window_data, 2);                 
+        end
+    end
+        
+        % Create plots
+        ax = gca;                                                                          % Get current axes
+        cla(ax, 'reset');                                                                  % Reset current axes
+        hold on                                                                            % Hold figure
+        plot(Time, emg_window_data, 'DisplayName', cellstr(num2str(amplitude_str)));       % Plot EMG data in window
+        Average_label = ['Average of ' num2str(count) ' Stims'];                           % Label for average line
+        plot(Time, average_emg_data, 'r', 'LineWidth', 2, 'DisplayName', Average_label);   % Plot average line 
+        plot([18 18],ylim,'color',[0.7 0.7 0.7],'linestyle',':')                           % Line marker at 18ms post-stimulation
+        plot([35 35],ylim,'color',[0.7 0.7 0.7],'linestyle',':')                           % Line marker at 35ms post-stimulation
+
+        % Plot formatting
+        title('Motor Evoked Potentials');              
+        subtitle([num2str(count) ' Stimulations at ' StimIntensity '% Intensity'])
+        xlabel('Time (ms)') 
+        ylabel('EMG (mV)')
+      
+        % Legend for MEP amplitude
+        lgd = legend;
+        lgd.NumColumns = 4;
+        lgd.Title.String = 'MEP Amplitude';
+        lgd.Location = 'southoutside';                     % Dictates location of legend
+        lgd.String = lgd.String(1:end-2);                  % Removes labels from line markers
+
+        %% Save graphs and data
+        if dataIsSaved == true
+            timestamp = datestr(now, 'ddmmyy_HHMMSS');          % Create filename using the timestamp
+            stims = [num2str(count) '_Stims_'];                 % Adds current number of stims to filename  
+            filename = [stims  timestamp '.fig'];               % Combines into full filename 
+            saveas(gcf, [savefolder filesep filename]);         % Saves current figure 
+            filename = strcat(ID, '_', StimIntensity, '.mat');  % Create the filename
+            fileLocation = fullfile(saveLocation, filename);    % Combines location and filename into a full path 
+            save(fileLocation);                                 % Saves entire workspace to the chosen directory
+            msgbox(['File saved as ' fileLocation 'Graph saved as ' filename], 'Save Successful'); % Pop-up informing user that file has been saved
+        end
+end
+
+
+
