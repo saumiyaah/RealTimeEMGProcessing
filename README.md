@@ -7,4 +7,4 @@ Contents
 -------------
 - Near real-time script (Script_for_data_analysis.mat)
 - Post-processing application (app1_postprocessingfinal.mlapp)
-- Sample data 
+- Sample EMG data (for use with post-processing app)
